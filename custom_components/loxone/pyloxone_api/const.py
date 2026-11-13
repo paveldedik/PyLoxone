@@ -68,6 +68,18 @@ LOXAPPPATH: Final = "/data/LoxAPP3.json"
 CMD_KEEP_ALIVE: Final = "keepalive"
 CMD_GET_API_KEY: Final = "/jdev/cfg/apiKey"
 CMD_GET_PUBLIC_KEY: Final = "/jdev/sys/getPublicKey"
+
+# Loxone Remote Connect: host "connect.loxonecloud.com/<SNR>" is resolved to
+# the relay URL of the Miniserver through /getip before the bootstrap.
+REMOTE_CONNECT_HOST: Final = "connect.loxonecloud.com"
+REMOTE_CONNECT_GETIP: Final = f"https://{REMOTE_CONNECT_HOST}/getip"
+# Sent ONLY with the /getip request: since 2026-11-11 Remote Connect answers
+# 403 "Request not permitted" to clients it does not recognise.
+REMOTE_CONNECT_USER_AGENT: Final = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Loxone/17.3.0 Chrome/156.0.8078.80 "
+    "Electron/45.2.2 Safari/537.36"
+)
 CMD_KEY_EXCHANGE: Final = "jdev/sys/keyexchange/"
 CMD_GET_KEY: Final = "jdev/sys/getkey"
 CMD_GET_KEY_AND_SALT: Final = "jdev/sys/getkey2"

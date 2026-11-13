@@ -41,7 +41,8 @@ from .const import (AES_KEY_SIZE, CMD_AUTH_WITH_TOKEN, CMD_ENABLE_UPDATES,
                     IV_BYTES, KEEP_ALIVE_PERIOD, LLRSP_UNAUTHORISED_CODES,
                     LOXAPPPATH, MAX_RECONNECT_DELAY, MAX_REFRESH_DELAY,
                     MAX_WEBSOCKET_MESSAGE_SIZE, MESSAGE_HEADER_SIZE,
-                    RECONNECT_DELAY, RECONNECT_TRIES, SALT_BYTES,
+                    RECONNECT_DELAY, RECONNECT_TRIES, REMOTE_CONNECT_GETIP,
+                    REMOTE_CONNECT_HOST, REMOTE_CONNECT_USER_AGENT, SALT_BYTES,
                     SALT_MAX_AGE_SECONDS, SALT_MAX_USE_COUNT,
                     SECURED_COMMAND_TIMEOUT, TIMEOUT,
                     TOKEN_PERMISSION, TOKEN_REFRESH_MAX_FAILURES,
@@ -444,6 +445,14 @@ class LoxoneBaseConnection:
             self.url = f"{netloc}:{used_port}{parsed.path}"
         else:
             self.url = f"{netloc}{parsed.path}"
+
+        # Host "connect.loxonecloud.com/<SNR>": the relay URL is looked up
+        # through /getip in ``open()``. The serial is kept separately because
+        # ``_apply_url`` overwrites ``self.url`` and every ``open()``
+        # (reconnects too) has to look the relay up again.
+        self._remote_connect_snr: str | None = None
+        if netloc.lower() == REMOTE_CONNECT_HOST:
+            self._remote_connect_snr = parsed.path.strip("/") or None
 
         # Generate random 16 byte AES initialisation vector (iv)
         try:
@@ -2231,6 +2240,46 @@ class LoxoneConnection(LoxoneBaseConnection):
         assert last_exc is not None
         raise last_exc
 
+    async def _resolve_remote_connect(
+        self, session: aiohttp.ClientSession | None
+    ) -> None:
+        """Ask Loxone Remote Connect for the relay URL and switch to it.
+
+        The request carries no credentials, always verifies TLS
+        (independent of ``verify_ssl``) and follows no redirects. The
+        User-Agent is set for this one request only; the bootstrap GETs
+        and the websocket keep their defaults.
+        """
+        http = session or aiohttp.ClientSession()
+        try:
+            async with http.get(
+                REMOTE_CONNECT_GETIP,
+                params={"snr": self._remote_connect_snr, "json": "true"},
+                headers={"User-Agent": REMOTE_CONNECT_USER_AGENT},
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    raise LoxoneConnectionError(
+                        f"Remote Connect lookup failed: HTTP {resp.status}"
+                    )
+                payload = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            raise LoxoneConnectionError(
+                f"Remote Connect lookup failed: {e}"
+            ) from e
+        finally:
+            if session is None:
+                await http.close()
+
+        relay = payload.get("url") if isinstance(payload, dict) else None
+        if not relay or not isinstance(relay, str):
+            raise LoxoneConnectionError("Remote Connect returned no relay URL")
+        scheme, host = parse_loxone_url(relay)
+        if scheme != "https":
+            raise LoxoneConnectionError("Remote Connect relay URL is not https")
+        self._apply_url(scheme, host)
+
     async def open(
         self,
         session: aiohttp.ClientSession | None = None,
@@ -2254,6 +2303,8 @@ class LoxoneConnection(LoxoneBaseConnection):
 
         connector = None
         try:
+            if self._remote_connect_snr:
+                await self._resolve_remote_connect(session)
             connector = LoxoneAsyncHttpClient(
                 url=self.url,
                 username=self.username,
